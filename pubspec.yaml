@@ -38,6 +38,8 @@ dependencies:
   amplify_auth_cognito: ^2.10.0
   amplify_storage_s3: ^2.10.0
   image_picker: ^1.2.1
+  shared_preferences: ^2.5.5
+  amplify_api: ^2.10.0
 
 dev_dependencies:
   flutter_test:

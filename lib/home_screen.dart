@@ -1,10 +1,12 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'preview_screen.dart';
 import 'auth/auth_ screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,9 +17,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final ImagePicker _picker = ImagePicker();
+  int currentIndex = 0;
   bool isDeleting = false;
   double uploadProgress = 0;
   bool isUploading = false;
+  Set<String> favoriteImages = {};
 
   List<String> imageUrls = [];
   List<String> imagePaths = [];
@@ -25,8 +29,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String status = "";
 
   @override
+  @override
   void initState() {
     super.initState();
+    loadCloudFavorites();
     fetchImages();
   }
 
@@ -208,69 +214,337 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> loadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final saved = prefs.getStringList('favorites');
+
+    if (saved != null) {
+      setState(() {
+        favoriteImages = saved.toSet();
+      });
+    }
+  }
+
+  Future<void> toggleFavorite(String url) async {
+  final isFav = favoriteImages.contains(url);
+
+  setState(() {
+    if (isFav) {
+      favoriteImages.remove(url);
+    } else {
+      favoriteImages.add(url);
+    }
+  });
+
+  try {
+    if (!isFav) {
+      // ➕ ADD FAVORITE
+      final request = GraphQLRequest<String>(
+        document: '''
+        mutation CreateFavorite {
+          createFavorite(input: { imageUrl: "$url" }) {
+            id
+          }
+        }
+        ''',
+      );
+
+      await Amplify.API.mutate(request: request).response;
+    } else {
+      // ❌ REMOVE FAVORITE
+
+      // 1️⃣ Find the favorite first
+      final query = GraphQLRequest<String>(
+        document: '''
+        query ListFavorites {
+          listFavorites {
+            items {
+              id
+              imageUrl
+            }
+          }
+        }
+        ''',
+      );
+
+      final response = await Amplify.API.query(request: query).response;
+
+      final data = response.data;
+
+      if (data != null) {
+        final match = RegExp(
+          r'\{[^}]*"id":"(.*?)"[^}]*"imageUrl":"$url"[^}]*\}',
+        ).firstMatch(data);
+
+        if (match != null) {
+          final favId = match.group(1);
+
+          final deleteRequest = GraphQLRequest<String>(
+            document: '''
+            mutation DeleteFavorite {
+              deleteFavorite(input: { id: "$favId" }) {
+                id
+              }
+            }
+            ''',
+          );
+
+          await Amplify.API.mutate(request: deleteRequest).response;
+        }
+      }
+    }
+  } catch (e) {
+    print("Cloud favorite error: $e");
+  }
+}
+Future<void> loadCloudFavorites() async {
+  try {
+    final request = GraphQLRequest<String>(
+      document: '''
+      query ListFavorites {
+        listFavorites {
+          items {
+            id
+            imageUrl
+          }
+        }
+      }
+      ''',
+    );
+
+    final response = await Amplify.API.query(request: request).response;
+
+    final data = response.data;
+
+    if (data != null) {
+      final urls = RegExp(r'"imageUrl":"(.*?)"')
+          .allMatches(data)
+          .map((m) => m.group(1)!)
+          .toSet();
+
+      setState(() {
+        favoriteImages = urls;
+      });
+    }
+  } catch (e) {
+    print("Error loading favorites: $e");
+  }
+}
   Widget buildImageItem(int index) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => PreviewScreen(url: imageUrls[index]),
+  final imageUrl = imageUrls[index];
+  final isFavorite = favoriteImages.contains(imageUrl);
+
+  return GestureDetector(
+    onTap: () {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PreviewScreen(url: imageUrl),
+        ),
+      );
+    },
+    onLongPress: () {
+      confirmDelete(imagePaths[index]);
+    },
+    child: Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 6,
+            offset: Offset(0, 3),
+          )
+        ],
+      ),
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Image.network(
+              imageUrl,
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
+            ),
+          ),
+
+          // 🔥 GRADIENT OVERLAY
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.3),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // ❤️ FAVORITE ICON
+          Positioned(
+            top: 8,
+            right: 8,
+            child: GestureDetector(
+              onTap: () => toggleFavorite(imageUrl),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isFavorite
+                      ? Icons.favorite
+                      : Icons.favorite_border,
+                  color: isFavorite ? Colors.red : Colors.white,
+                  size: 18,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+  Widget buildFavoritesGrid() {
+    final favList = imageUrls
+        .where((url) => favoriteImages.contains(url))
+        .toList();
+
+    if (favList.isEmpty) {
+      return const Center(child: Text("No favorites yet"));
+    }
+
+    return GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(10),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 5,
+        mainAxisSpacing: 5,
+      ),
+      itemCount: favList.length,
+      itemBuilder: (context, index) {
+        final imageUrl = favList[index];
+
+        return GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PreviewScreen(url: imageUrl)),
+            );
+          },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.network(imageUrl, fit: BoxFit.cover),
           ),
         );
       },
-      onLongPress: isDeleting ? null : () => confirmDelete(imagePaths[index]),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.network(imageUrls[index], fit: BoxFit.cover),
-      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: const Text("My Gallery"),
-        actions: [
-          IconButton(icon: const Icon(Icons.logout), onPressed: logout),
+  title: const Text(
+    "My Gallery",
+    style: TextStyle(fontWeight: FontWeight.bold),
+  ),
+  centerTitle: true,
+  elevation: 0,
+  backgroundColor: Colors.white,
+  foregroundColor: Colors.black,
+  actions: [
+    IconButton(
+      icon: const Icon(Icons.logout),
+      onPressed: logout,
+    ),
+  ],
+),
+
+      // 👇 BODY SWITCHES BETWEEN TABS
+      body: getCurrentScreen(),
+     
+
+      // 👇 BOTTOM NAVIGATION
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: currentIndex,
+        onTap: (index) {
+          setState(() {
+            currentIndex = index;
+          });
+        },
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.photo), label: "Gallery"),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.favorite),
+            label: "Favorites",
+          ),
         ],
       ),
 
-      floatingActionButton: FloatingActionButton(
+      // 👇 FAB ONLY ON GALLERY
+      floatingActionButton: currentIndex == 0
+    ? FloatingActionButton(
+        backgroundColor: Colors.black,
         onPressed: isUploading ? null : pickImage,
-        child: const Icon(Icons.add),
-      ),
-
-      body: isUploading
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text("Uploading... ${(uploadProgress * 100).toInt()}%"),
-                  const SizedBox(height: 16),
-                  LinearProgressIndicator(value: uploadProgress),
-                ],
-              ),
-            )
-          : isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : imageUrls.isEmpty
-          ? const EmptyState()
-          : GridView.builder(
-              padding: const EdgeInsets.all(10),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 5,
-                mainAxisSpacing: 5,
-              ),
-              itemCount: imageUrls.length,
-              itemBuilder: (context, index) {
-                return buildImageItem(index);
-              },
-            ),
+        child: isUploading
+            ? const CircularProgressIndicator(color: Colors.white)
+            : const Icon(Icons.add, color: Colors.white),
+      )
+    : null,
     );
+  }
+
+  Widget getCurrentScreen() {
+    if (currentIndex == 0) {
+      // 🖼 GALLERY TAB
+
+      if (isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      if (imageUrls.isEmpty) {
+        return RefreshIndicator(
+          onRefresh: fetchImages,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: const [SizedBox(height: 200), EmptyState()],
+          ),
+        );
+      }
+
+      return RefreshIndicator(
+        onRefresh: fetchImages,
+        child: GridView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(12),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+          ),
+          itemCount: imageUrls.length,
+          itemBuilder: (context, index) {
+            return buildImageItem(index);
+          },
+        ),
+      );
+    } else {
+      // ❤️ FAVORITES TAB
+      return buildFavoritesGrid();
+    }
   }
 }
 
