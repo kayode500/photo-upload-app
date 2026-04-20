@@ -9,6 +9,7 @@ import 'auth/auth_ screen.dart';
 import 'home_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
 

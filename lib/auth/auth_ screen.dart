@@ -1,6 +1,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
+import 'package:photo_upload_app/home_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -98,7 +99,10 @@ Future<void> confirmSignUp(String code) async {
     print("LOGIN RESULT: ${result.isSignedIn}");
 
     if (result.isSignedIn) {
-      Navigator.pushReplacementNamed(context, "/home");
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen())
+      );
     } else {
       setState(() {
         status = "❌ Login not complete";

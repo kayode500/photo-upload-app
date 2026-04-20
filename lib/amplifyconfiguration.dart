@@ -1,6 +1,18 @@
 const amplifyconfig = '''{
     "UserAgent": "aws-amplify-cli/2.0",
     "Version": "1.0",
+    "api": {
+        "plugins": {
+            "awsAPIPlugin": {
+                "photouploadapp": {
+                    "endpointType": "GraphQL",
+                    "endpoint": "https://2w7hazqvxraprg4pgeepvsmba4.appsync-api.us-east-2.amazonaws.com/graphql",
+                    "region": "us-east-2",
+                    "authorizationType": "AMAZON_COGNITO_USER_POOLS"
+                }
+            }
+        }
+    },
     "auth": {
         "plugins": {
             "awsCognitoAuthPlugin": {
@@ -51,6 +63,14 @@ const amplifyconfig = '''{
                     "Default": {
                         "Bucket": "photouploadapp59ca75ed1152432d9576d5d121f2a245724d5-dev",
                         "Region": "us-east-2"
+                    }
+                },
+                "AppSync": {
+                    "Default": {
+                        "ApiUrl": "https://2w7hazqvxraprg4pgeepvsmba4.appsync-api.us-east-2.amazonaws.com/graphql",
+                        "Region": "us-east-2",
+                        "AuthMode": "AMAZON_COGNITO_USER_POOLS",
+                        "ClientDatabasePrefix": "photouploadapp_AMAZON_COGNITO_USER_POOLS"
                     }
                 }
             }

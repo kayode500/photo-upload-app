@@ -1,12 +1,14 @@
+import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'preview_screen.dart';
 import 'auth/auth_ screen.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,7 +23,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isDeleting = false;
   double uploadProgress = 0;
   bool isUploading = false;
-  Set<String> favoriteImages = {};
+  Map<String, String> favoriteMap = {};
+  // key = normalized path, value = favoriteId
+  Map<String, String> pathToUrl = {};
 
   List<String> imageUrls = [];
   List<String> imagePaths = [];
@@ -29,11 +33,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String status = "";
 
   @override
-  @override
   void initState() {
     super.initState();
-    loadCloudFavorites();
-    fetchImages();
+    Future.microtask(() async {
+      // await clearAllFavorites();
+      await loadCloudFavorites();
+      await fetchImages();
+    });
   }
 
   // 📸 Pick Image
@@ -132,6 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           urls.add(urlResult.url.toString());
           paths.add(item.path);
+          pathToUrl[item.path] = urlResult.url.toString();
         } catch (urlError) {
           print("❌ Error getting URL for ${item.path}: $urlError");
         }
@@ -177,6 +184,24 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<String> getImageUrl(String path) async {
+    final result = await Amplify.Storage.getUrl(
+      path: StoragePath.fromString(path),
+    ).result;
+
+    return result.url.toString();
+  }
+
+  String extractPath(String fullUrl) {
+    final uri = Uri.parse(fullUrl);
+    final segments = uri.pathSegments;
+
+    // private/<identityId>/uploads/image.png
+    final index = segments.indexOf('private');
+
+    return segments.sublist(index).join('/');
+  }
+
   Future<void> confirmDelete(String path) async {
     final confirm = await showDialog(
       context: context,
@@ -214,92 +239,125 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> loadFavorites() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> clearAllFavorites() async {
+    try {
+      String? nextToken;
 
-    final saved = prefs.getStringList('favorites');
-
-    if (saved != null) {
-      setState(() {
-        favoriteImages = saved.toSet();
-      });
-    }
-  }
-
-  Future<void> toggleFavorite(String url) async {
-  final isFav = favoriteImages.contains(url);
-
-  setState(() {
-    if (isFav) {
-      favoriteImages.remove(url);
-    } else {
-      favoriteImages.add(url);
-    }
-  });
-
-  try {
-    if (!isFav) {
-      // ➕ ADD FAVORITE
-      final request = GraphQLRequest<String>(
-        document: '''
-        mutation CreateFavorite {
-          createFavorite(input: { imageUrl: "$url" }) {
-            id
-          }
-        }
-        ''',
-      );
-
-      await Amplify.API.mutate(request: request).response;
-    } else {
-      // ❌ REMOVE FAVORITE
-
-      // 1️⃣ Find the favorite first
-      final query = GraphQLRequest<String>(
-        document: '''
-        query ListFavorites {
-          listFavorites {
+      do {
+        final request = GraphQLRequest<String>(
+          document: '''
+        query ListFavorites(\$nextToken: String) {
+          listFavorites(nextToken: \$nextToken) {
             items {
               id
-              imageUrl
             }
+            nextToken
           }
         }
         ''',
-      );
+          variables: {"nextToken": nextToken},
+        );
 
-      final response = await Amplify.API.query(request: query).response;
+        final response = await Amplify.API.query(request: request).response;
 
-      final data = response.data;
+        final data = jsonDecode(response.data!);
+        final result = data['listFavorites'];
 
-      if (data != null) {
-        final match = RegExp(
-          r'\{[^}]*"id":"(.*?)"[^}]*"imageUrl":"$url"[^}]*\}',
-        ).firstMatch(data);
+        final items = result['items'];
+        nextToken = result['nextToken'];
 
-        if (match != null) {
-          final favId = match.group(1);
+        for (var item in items) {
+          final id = item['id'];
 
-          final deleteRequest = GraphQLRequest<String>(
-            document: '''
+          await Amplify.API
+              .mutate(
+                request: GraphQLRequest<String>(
+                  document:
+                      '''
             mutation DeleteFavorite {
-              deleteFavorite(input: { id: "$favId" }) {
+              deleteFavorite(input: { id: "$id" }) {
                 id
               }
             }
             ''',
-          );
+                ),
+              )
+              .response;
 
-          await Amplify.API.mutate(request: deleteRequest).response;
+          print("🗑 Deleted: $id");
         }
-      }
+      } while (nextToken != null);
+
+      setState(() {
+        favoriteMap.clear();
+      });
+
+      print("✅ ALL favorites cleared from DB");
+    } catch (e) {
+      print("❌ Error clearing favorites: $e");
     }
-  } catch (e) {
-    print("Cloud favorite error: $e");
   }
-}
-Future<void> loadCloudFavorites() async {
-  try {
+
+  Future<void> toggleFavorite(String url) async {
+    final key = _normalizePath(url);
+    final isFav = favoriteMap.containsKey(key);
+
+    if (isFav) {
+      // REMOVE
+      final id = favoriteMap[key];
+
+      await Amplify.API
+          .mutate(
+            request: GraphQLRequest<String>(
+              document:
+                  '''
+          mutation DeleteFavorite {
+            deleteFavorite(input: { id: "$id" }) {
+              id
+            }
+          }
+          ''',
+            ),
+          )
+          .response;
+
+      setState(() {
+        favoriteMap.remove(key);
+        pathToUrl.remove(key);
+      });
+    } else {
+      // ADD
+
+      // 🔥 HARD GUARD (PREVENT DUPLICATE)
+      if (favoriteMap.containsKey(key)) return;
+
+      final response = await Amplify.API
+          .mutate(
+            request: GraphQLRequest<String>(
+              document:
+                  '''
+          mutation CreateFavorite {
+            createFavorite(input: { imageUrl: "$url" }) {
+              id
+              imageUrl
+            }
+          }
+          ''',
+            ),
+          )
+          .response;
+
+      final data = jsonDecode(response.data!);
+      final newItem = data['createFavorite'];
+
+      setState(() {
+        favoriteMap[key] = newItem['id'];
+        pathToUrl[key] = url;
+      });
+    }
+  }
+
+  Future<void> loadCloudFavorites() async {
     final request = GraphQLRequest<String>(
       document: '''
       query ListFavorites {
@@ -315,138 +373,206 @@ Future<void> loadCloudFavorites() async {
 
     final response = await Amplify.API.query(request: request).response;
 
-    final data = response.data;
+    final data = jsonDecode(response.data!);
+    final items = data['listFavorites']['items'];
 
-    if (data != null) {
-      final urls = RegExp(r'"imageUrl":"(.*?)"')
-          .allMatches(data)
-          .map((m) => m.group(1)!)
-          .toSet();
+    final Map<String, String> tempMap = {};
 
-      setState(() {
-        favoriteImages = urls;
-      });
+    for (var item in items) {
+      final url = item['imageUrl'];
+      final id = item['id'];
+      final key = _normalizePath(url);
+
+      // 🔥 PREVENT DUPLICATES HERE
+      tempMap[key] = id;
+      pathToUrl[key] = url;
     }
-  } catch (e) {
-    print("Error loading favorites: $e");
+
+    // 🔥 IMPORTANT: SINGLE SETSTATE ONLY
+    setState(() {
+      favoriteMap = tempMap;
+    });
+
+    print("✅ Favorites synced: ${favoriteMap.length}");
   }
-}
-  Widget buildImageItem(int index) {
-  final imageUrl = imageUrls[index];
-  final isFavorite = favoriteImages.contains(imageUrl);
 
-  return GestureDetector(
-    onTap: () {
-      Navigator.push(
+  Future<void> shareImage(String imageUrl) async {
+    try {
+      ScaffoldMessenger.of(
         context,
-        MaterialPageRoute(
-          builder: (_) => PreviewScreen(url: imageUrl),
+      ).showSnackBar(const SnackBar(content: Text("Preparing image...")));
+
+      final signedUrl = await getImageUrl(extractPath(imageUrl));
+
+      // 🔥 DOWNLOAD IMAGE
+      final response = await http.get(Uri.parse(signedUrl));
+
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/shared_image.png');
+
+      await file.writeAsBytes(response.bodyBytes);
+
+      // 🔥 SHARE FILE (NOT LINK)
+      await Share.shareXFiles([
+        XFile(file.path),
+      ], text: "Check out this image!");
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Failed to share image")));
+
+      print("❌ Share error: $e");
+    }
+  }
+
+  String _normalizePath(String url) {
+    final uri = Uri.parse(url);
+    return uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+  }
+
+  Widget buildImageItem(int index) {
+    final imageUrl = imageUrls[index];
+    final key = _normalizePath(imageUrl);
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => PreviewScreen(url: imageUrl)),
+        );
+      },
+      onLongPress: () {
+        confirmDelete(imagePaths[index]);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 6,
+              offset: Offset(0, 3),
+            ),
+          ],
         ),
-      );
-    },
-    onLongPress: () {
-      confirmDelete(imagePaths[index]);
-    },
-    child: Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 3),
-          )
-        ],
-      ),
-      child: Stack(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Image.network(
-              imageUrl,
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
-            ),
-          ),
+        child: Stack(
+          children: [
+            Positioned.fill(child: Image.network(imageUrl, fit: BoxFit.cover)),
 
-          // 🔥 GRADIENT OVERLAY
-          Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.3),
-                    Colors.transparent,
-                  ],
+            Positioned(
+              top: 5,
+              right: 5,
+              child: GestureDetector(
+                onTap: () => toggleFavorite(imageUrl),
+                child: CircleAvatar(
+                  radius: 14,
+                  backgroundColor: Colors.black54,
+                  child: Icon(
+                    favoriteMap.containsKey(key)
+                        ? Icons.favorite
+                        : Icons.favorite_border,
+                    color: Colors.red,
+                    size: 18,
+                  ),
                 ),
               ),
             ),
-          ),
-
-          // ❤️ FAVORITE ICON
-          Positioned(
-            top: 8,
-            right: 8,
-            child: GestureDetector(
-              onTap: () => toggleFavorite(imageUrl),
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  isFavorite
-                      ? Icons.favorite
-                      : Icons.favorite_border,
-                  color: isFavorite ? Colors.red : Colors.white,
-                  size: 18,
+            Positioned(
+              top: 5,
+              left: 5,
+              child: GestureDetector(
+                onTap: () => shareImage(imageUrl),
+                child: CircleAvatar(
+                  radius: 14,
+                  backgroundColor: Colors.black54,
+                  child: Icon(Icons.share, color: Colors.white, size: 18),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget buildFavoritesGrid() {
-    final favList = imageUrls
-        .where((url) => favoriteImages.contains(url))
-        .toList();
+    final favoriteUrls = favoriteMap.keys.toList();
 
-    if (favList.isEmpty) {
+    if (favoriteUrls.isEmpty) {
       return const Center(child: Text("No favorites yet"));
     }
 
     return GridView.builder(
-      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(10),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         crossAxisSpacing: 5,
         mainAxisSpacing: 5,
       ),
-      itemCount: favList.length,
+      itemCount: favoriteUrls.length,
       itemBuilder: (context, index) {
-        final imageUrl = favList[index];
+        final path = favoriteUrls[index];
 
-        return GestureDetector(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => PreviewScreen(url: imageUrl)),
+        return FutureBuilder<String>(
+          future: getImageUrl(path),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final imageUrl = snapshot.data!;
+
+            return GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PreviewScreen(url: imageUrl),
+                  ),
+                );
+              },
+              onLongPress: () {
+                confirmDelete(path);
+              },
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: Image.network(imageUrl, fit: BoxFit.cover,
+                      loadingBuilder: (context, child, loadingProgress) => loadingProgress == null
+                          ? child
+                          : Container(
+                              color: Colors.grey[300],
+                              child: const Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 5,
+                      right: 5,
+                      child: GestureDetector(
+                        onTap: () => toggleFavorite(imageUrl),
+                        child: CircleAvatar(
+                          radius: 14,
+                          backgroundColor: Colors.black54,
+                          child: Icon(
+                            favoriteMap.containsKey(path)
+                                ? Icons.favorite
+                                : Icons.favorite_border,
+                            color: Colors.red,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             );
           },
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.network(imageUrl, fit: BoxFit.cover),
-          ),
         );
       },
     );
@@ -455,27 +581,23 @@ Future<void> loadCloudFavorites() async {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-       backgroundColor: Colors.grey[100],
+      backgroundColor: Colors.grey[100],
       appBar: AppBar(
-  title: const Text(
-    "My Gallery",
-    style: TextStyle(fontWeight: FontWeight.bold),
-  ),
-  centerTitle: true,
-  elevation: 0,
-  backgroundColor: Colors.white,
-  foregroundColor: Colors.black,
-  actions: [
-    IconButton(
-      icon: const Icon(Icons.logout),
-      onPressed: logout,
-    ),
-  ],
-),
+        title: const Text(
+          "My Gallery",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        actions: [
+          IconButton(icon: const Icon(Icons.logout), onPressed: logout),
+        ],
+      ),
 
       // 👇 BODY SWITCHES BETWEEN TABS
       body: getCurrentScreen(),
-     
 
       // 👇 BOTTOM NAVIGATION
       bottomNavigationBar: BottomNavigationBar(
@@ -496,14 +618,14 @@ Future<void> loadCloudFavorites() async {
 
       // 👇 FAB ONLY ON GALLERY
       floatingActionButton: currentIndex == 0
-    ? FloatingActionButton(
-        backgroundColor: Colors.black,
-        onPressed: isUploading ? null : pickImage,
-        child: isUploading
-            ? const CircularProgressIndicator(color: Colors.white)
-            : const Icon(Icons.add, color: Colors.white),
-      )
-    : null,
+          ? FloatingActionButton(
+              backgroundColor: Colors.black,
+              onPressed: isUploading ? null : pickImage,
+              child: isUploading
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Icon(Icons.add, color: Colors.white),
+            )
+          : null,
     );
   }
 
