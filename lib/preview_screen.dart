@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class PreviewScreen extends StatelessWidget {
   final String url;
 
-  const PreviewScreen({super.key, required this.url});
+  const PreviewScreen({super.key, required this.url, required String imageUrl});
 
   @override
   Widget build(BuildContext context) {

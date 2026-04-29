@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
-import 'preview_screen.dart';
 import 'auth/auth_ screen.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
+//import 'package:flutter/foundation.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'swipe_viewer.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,21 +27,31 @@ class _HomeScreenState extends State<HomeScreen> {
   double uploadProgress = 0;
   bool isUploading = false;
   Map<String, String> favoriteMap = {};
-  // key = normalized path, value = favoriteId
-  Map<String, String> pathToUrl = {};
-
   List<String> imageUrls = [];
   List<String> imagePaths = [];
+  List<String> allPaths = []; // 🔥 ALL fetched paths
+  bool isFetchingMore = false;
+  final int pageSize = 20;
+  // List<String> favoritePaths = [];
   bool isLoading = false;
   String status = "";
+  int currentLimit = 20;
+  final Map<String, String> signedUrlCache = {};
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     Future.microtask(() async {
-      // await clearAllFavorites();
+      //    await clearAllFavorites();
       await loadCloudFavorites();
       await fetchImages();
+      _scrollController.addListener(() {
+        if (_scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 200) {
+          loadMoreImages();
+        }
+      });
     });
   }
 
@@ -114,7 +127,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 🖼 Fetch images
   Future<void> fetchImages() async {
     setState(() {
       isLoading = true;
@@ -127,27 +139,37 @@ class _HomeScreenState extends State<HomeScreen> {
         path: StoragePath.fromString("private/$identityId/uploads/"),
       ).result;
 
-      List<String> urls = [];
-      List<String> paths = [];
+      allPaths = listResult.items.map((e) => e.path).toList();
 
-      for (final item in listResult.items) {
+      // 🔥 clear current UI state for fresh load
+      imageUrls.clear();
+      imagePaths.clear();
+
+      // 🔥 use cached URLs if available first
+      for (final path in allPaths) {
         try {
-          final urlResult = await Amplify.Storage.getUrl(
-            path: StoragePath.fromString(item.path),
-          ).result;
+          String url;
 
-          urls.add(urlResult.url.toString());
-          paths.add(item.path);
-          pathToUrl[item.path] = urlResult.url.toString();
-        } catch (urlError) {
-          print("❌ Error getting URL for ${item.path}: $urlError");
+          if (signedUrlCache.containsKey(path)) {
+            url = signedUrlCache[path]!; // ⚡ cached
+          } else {
+            final urlResult = await Amplify.Storage.getUrl(
+              path: StoragePath.fromString(path),
+            ).result;
+
+            url = urlResult.url.toString();
+
+            signedUrlCache[path] = url; // 🔥 cache it
+          }
+
+          imageUrls.add(url);
+          imagePaths.add(path);
+        } catch (e) {
+          print("❌ URL error for $path: $e");
         }
       }
 
-      setState(() {
-        imageUrls = urls;
-        imagePaths = paths;
-      });
+      setState(() {});
     } catch (e) {
       print("❌ ERROR: $e");
       setState(() {
@@ -160,36 +182,139 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> deleteImage(String path) async {
-    setState(() {
-      isDeleting = true;
-    });
+  Future<void> loadMoreImages({bool reset = false}) async {
+    if (isFetchingMore) return;
+    // final int pageSize = 5;
+
+    isFetchingMore = true;
 
     try {
-      await Amplify.Storage.remove(path: StoragePath.fromString(path)).result;
+      if (reset) {
+        imageUrls.clear();
+        imagePaths.clear();
+        currentLimit = pageSize;
+      } else {
+        currentLimit += pageSize;
+      }
 
-      await fetchImages();
+      final pathsToLoad = allPaths
+          .take(currentLimit)
+          .skip(imagePaths.length)
+          .toList();
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Image deleted")));
+      for (final path in pathsToLoad) {
+        try {
+          final urlResult = await Amplify.Storage.getUrl(
+            path: StoragePath.fromString(path),
+          ).result;
+
+          imageUrls.add(urlResult.url.toString());
+          imagePaths.add(path);
+          signedUrlCache[path] = urlResult.url.toString();
+        } catch (e) {
+          print("❌ URL error: $e");
+        }
+      }
+      // print("📦 Loaded batch:");
+      // print("Current visible: ${imageUrls.length}");
+      // print("Total paths: ${allPaths.length}");
+
+      setState(() {});
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Error deleting image")));
+      print("❌ Pagination error: $e");
     }
 
-    setState(() {
-      isDeleting = false;
-    });
+    isFetchingMore = false;
   }
 
-  Future<String> getImageUrl(String path) async {
-    final result = await Amplify.Storage.getUrl(
-      path: StoragePath.fromString(path),
-    ).result;
+  Future<void> deleteImage(String input) async {
+    final key = _normalizePath(extractPath(input)); // 🔥 identity
 
-    return result.url.toString();
+    // 🔥 find original storage path
+    final originalPath = imagePaths.firstWhere(
+      (p) => _normalizePath(p) == key,
+      orElse: () => key,
+    );
+
+    final favoriteId = favoriteMap[key];
+
+    try {
+      // ✅ delete from S3
+      await Amplify.Storage.remove(
+        path: StoragePath.fromString(originalPath),
+      ).result;
+
+      // ✅ delete from favorites (if exists)
+      if (favoriteId != null) {
+        await Amplify.API
+            .mutate(
+              request: GraphQLRequest<String>(
+                document:
+                    '''
+            mutation DeleteFavorite {
+              deleteFavorite(input: { id: "$favoriteId" }) {
+                id
+              }
+            }
+            ''',
+              ),
+            )
+            .response;
+      }
+
+      setState(() {
+        for (var i = imagePaths.length - 1; i >= 0; i--) {
+          if (_normalizePath(imagePaths[i]) == key) {
+            imagePaths.removeAt(i);
+            if (i < imageUrls.length) {
+              imageUrls.removeAt(i);
+            }
+          }
+        }
+
+        allPaths.removeWhere((p) => _normalizePath(p) == key);
+        favoriteMap.remove(key);
+        signedUrlCache.remove(key);
+        if (currentLimit > imagePaths.length) {
+          currentLimit = imagePaths.length;
+        }
+      });
+
+      print("✅ Image deleted");
+    } catch (e) {
+      print("❌ Delete error: $e");
+    }
+  }
+
+  // }
+  Future<String> getImageUrl(String path) async {
+    final key = _normalizePath(path);
+
+    // ✅ return cached URL instantly
+    if (signedUrlCache.containsKey(key)) {
+      return signedUrlCache[key]!;
+    }
+
+    try {
+      final result = await Amplify.Storage.getUrl(
+        path: StoragePath.fromString(key),
+      ).result;
+
+      final url = result.url.toString();
+
+      // ✅ store in cache
+      signedUrlCache[key] = url;
+
+      // ✅ prevent memory overflow
+      if (signedUrlCache.length > 100) {
+        signedUrlCache.clear();
+      }
+
+      return url;
+    } catch (e) {
+      print("❌ getImageUrl error: $e");
+      rethrow;
+    }
   }
 
   String extractPath(String fullUrl) {
@@ -198,6 +323,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // private/<identityId>/uploads/image.png
     final index = segments.indexOf('private');
+    if (index < 0) {
+      return uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+    }
 
     return segments.sublist(index).join('/');
   }
@@ -298,111 +426,128 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> toggleFavorite(String url) async {
-    final key = _normalizePath(url);
+  Future<void> toggleFavorite(String input) async {
+    final key = _normalizePath(extractPath(input)); // 🔥 ALWAYS SAFE
+
     final isFav = favoriteMap.containsKey(key);
 
     if (isFav) {
-      // REMOVE
       final id = favoriteMap[key];
 
-      await Amplify.API
-          .mutate(
-            request: GraphQLRequest<String>(
-              document:
-                  '''
+      try {
+        await Amplify.API
+            .mutate(
+              request: GraphQLRequest<String>(
+                document:
+                    '''
           mutation DeleteFavorite {
             deleteFavorite(input: { id: "$id" }) {
               id
             }
           }
           ''',
-            ),
-          )
-          .response;
+              ),
+            )
+            .response;
 
-      setState(() {
-        favoriteMap.remove(key);
-        pathToUrl.remove(key);
-      });
+        setState(() {
+          favoriteMap.remove(key);
+        });
+      } catch (e) {
+        print("❌ Remove favorite error: $e");
+      }
     } else {
-      // ADD
-
-      // 🔥 HARD GUARD (PREVENT DUPLICATE)
-      if (favoriteMap.containsKey(key)) return;
-
-      final response = await Amplify.API
-          .mutate(
-            request: GraphQLRequest<String>(
-              document:
-                  '''
+      try {
+        final response = await Amplify.API
+            .mutate(
+              request: GraphQLRequest<String>(
+                document:
+                    '''
           mutation CreateFavorite {
-            createFavorite(input: { imageUrl: "$url" }) {
+            createFavorite(input: { imageUrl: "$key" }) {
               id
               imageUrl
             }
           }
           ''',
-            ),
-          )
-          .response;
+              ),
+            )
+            .response;
 
-      final data = jsonDecode(response.data!);
-      final newItem = data['createFavorite'];
+        final data = jsonDecode(response.data!);
+        final newItem = data['createFavorite'];
 
-      setState(() {
-        favoriteMap[key] = newItem['id'];
-        pathToUrl[key] = url;
-      });
+        setState(() {
+          favoriteMap[key] = newItem['id'];
+        });
+      } catch (e) {
+        print("❌ Add favorite error: $e");
+      }
     }
   }
 
   Future<void> loadCloudFavorites() async {
     final request = GraphQLRequest<String>(
       document: '''
-      query ListFavorites {
-        listFavorites {
-          items {
-            id
-            imageUrl
-          }
+    query ListFavorites {
+      listFavorites {
+        items {
+          id
+          imageUrl
         }
       }
-      ''',
+    }
+    ''',
     );
 
     final response = await Amplify.API.query(request: request).response;
 
-    final data = jsonDecode(response.data!);
-    final items = data['listFavorites']['items'];
-
-    final Map<String, String> tempMap = {};
-
-    for (var item in items) {
-      final url = item['imageUrl'];
-      final id = item['id'];
-      final key = _normalizePath(url);
-
-      // 🔥 PREVENT DUPLICATES HERE
-      tempMap[key] = id;
-      pathToUrl[key] = url;
+    if (response.data == null) {
+      print("❌ No response data");
+      return;
     }
 
-    // 🔥 IMPORTANT: SINGLE SETSTATE ONLY
+    final data = jsonDecode(response.data!);
+
+    final List items = data['listFavorites']?['items'] ?? []; // 🔥 SAFE
+
+    final Map<String, String> tempMap = {};
+    // final List<String> tempPaths = [];
+
+    for (var item in items) {
+      if (item == null) continue;
+
+      final url = item['path'] ?? item['imageUrl']; // 🔥 support both fields
+      final id = item['id'];
+
+      if (url == null || id == null) continue; // 🔥 safety check
+
+      final key = _normalizePath(extractPath(url)); // 🔥 FIX
+
+      tempMap[key] = id;
+      //tempPaths.add(key);
+    }
+
     setState(() {
       favoriteMap = tempMap;
+      // favoritePaths = favoriteMap.keys.toList();
     });
 
-    print("✅ Favorites synced: ${favoriteMap.length}");
+    //print("✅ Favorites synced: ${favoriteMap.length}");
   }
 
-  Future<void> shareImage(String imageUrl) async {
+  Future<void> shareImage(String path) async {
     try {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Preparing image...")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Preparing image..."),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.black87,
+          duration: Duration(seconds: 2),
+        ),
+      );
 
-      final signedUrl = await getImageUrl(extractPath(imageUrl));
+      final signedUrl = await getImageUrl(path);
 
       // 🔥 DOWNLOAD IMAGE
       final response = await http.get(Uri.parse(signedUrl));
@@ -425,67 +570,189 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> downloadImage(String path) async {
+    try {
+      // 🔥 REQUEST PERMISSION FIRST
+      final status = await Permission.photos.request();
+
+      if (!status.isGranted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Permission denied"),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.black87,
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+
+      final signedUrl = await getImageUrl(path);
+      final response = await http.get(Uri.parse(signedUrl));
+
+      final result = await ImageGallerySaver.saveImage(
+        response.bodyBytes,
+        quality: 100,
+        name: "downloaded_image",
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Image saved to gallery"),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.black87,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      print("✅ Saved: $result");
+    } catch (e) {
+      print("❌ Download error: $e");
+    }
+  }
+
   String _normalizePath(String url) {
     final uri = Uri.parse(url);
     return uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
   }
 
   Widget buildImageItem(int index) {
-    final imageUrl = imageUrls[index];
-    final key = _normalizePath(imageUrl);
+    final path = imagePaths[index];
+    final key = _normalizePath(path);
 
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => PreviewScreen(url: imageUrl)),
+          MaterialPageRoute(
+            builder: (_) =>
+                SwipeViewer(images: imagePaths, initialIndex: index),
+          ),
         );
       },
       onLongPress: () {
-        confirmDelete(imagePaths[index]);
+        confirmDelete(path);
       },
       child: Container(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.black12,
+              color: Colors.black.withOpacity(0.08),
               blurRadius: 6,
-              offset: Offset(0, 3),
+              offset: const Offset(0, 3),
             ),
           ],
         ),
         child: Stack(
           children: [
-            Positioned.fill(child: Image.network(imageUrl, fit: BoxFit.cover)),
+            // 🖼 IMAGE
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Hero(
+                  tag: imagePaths[index], // 🔥 use PATH as tag now
+                  child: FutureBuilder<String>(
+                    future: getSignedUrl(
+                      imagePaths[index],
+                    ), // 🔥 use PATH to get URL
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) {
+                        return Container(
+                          color: Colors.grey[200],
+                          child: Center(child: loadingWidget()),
+                        );
+                      }
 
-            Positioned(
-              top: 5,
-              right: 5,
-              child: GestureDetector(
-                onTap: () => toggleFavorite(imageUrl),
-                child: CircleAvatar(
-                  radius: 14,
-                  backgroundColor: Colors.black54,
-                  child: Icon(
-                    favoriteMap.containsKey(key)
-                        ? Icons.favorite
-                        : Icons.favorite_border,
-                    color: Colors.red,
-                    size: 18,
+                      return Image.network(
+                        snapshot.data!,
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.low,
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            color: Colors.grey[200],
+                            child: const Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            color: Colors.grey[300],
+                            child: const Center(
+                              child: Icon(
+                                Icons.broken_image,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
                   ),
                 ),
               ),
             ),
+
+            // ❤️ FAVORITE (TOP RIGHT)
             Positioned(
-              top: 5,
-              left: 5,
-              child: GestureDetector(
-                onTap: () => shareImage(imageUrl),
+              top: 8,
+              right: 8,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => toggleFavorite(path),
                 child: CircleAvatar(
-                  radius: 14,
-                  backgroundColor: Colors.black54,
-                  child: Icon(Icons.share, color: Colors.white, size: 18),
+                  radius: 16,
+                  backgroundColor: Colors.black.withOpacity(0.4),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    transitionBuilder: (child, animation) {
+                      return ScaleTransition(scale: animation, child: child);
+                    },
+                    child: Icon(
+                      favoriteMap.containsKey(key)
+                          ? Icons.favorite
+                          : Icons.favorite_border,
+                      key: ValueKey(favoriteMap.containsKey(key)),
+                      color: Colors.redAccent,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // 🔗 SHARE (BOTTOM RIGHT)
+            Positioned(
+              bottom: 8,
+              right: 8,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => shareImage(path),
+                child: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.black.withOpacity(0.4),
+                  child: const Icon(Icons.share, color: Colors.white, size: 18),
+                ),
+              ),
+            ),
+
+            // 📥 DOWNLOAD (BOTTOM LEFT)
+            Positioned(
+              bottom: 8,
+              left: 8,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => downloadImage(path),
+                child: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.black.withOpacity(0.4),
+                  child: const Icon(
+                    Icons.download,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
               ),
             ),
@@ -495,29 +762,57 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget buildFavoritesGrid() {
-    final favoriteUrls = favoriteMap.keys.toList();
+  Future<String> getSignedUrl(String path) async {
+    // ✅ return cached if exists
+    if (signedUrlCache.containsKey(path)) {
+      return signedUrlCache[path]!;
+    }
 
-    if (favoriteUrls.isEmpty) {
+    // 🔄 fetch new signed URL
+    final result = await Amplify.Storage.getUrl(
+      path: StoragePath.fromString(path),
+    ).result;
+
+    final url = result.url.toString();
+
+    // 💾 store in cache
+    signedUrlCache[path] = url;
+
+    // 🚨 LIMIT CACHE SIZE (PUT IT HERE)
+    if (signedUrlCache.length > 100) {
+      signedUrlCache.clear();
+    }
+
+    return url;
+  }
+
+  Widget buildFavoritesGrid() {
+    final favoritePaths = favoriteMap.keys
+        .map((e) => _normalizePath(e))
+        .toList();
+    if (favoritePaths.isEmpty) {
       return const Center(child: Text("No favorites yet"));
     }
 
     return GridView.builder(
+      cacheExtent: 1000,
       padding: const EdgeInsets.all(10),
+      controller: _scrollController,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         crossAxisSpacing: 5,
         mainAxisSpacing: 5,
       ),
-      itemCount: favoriteUrls.length,
+      itemCount: favoritePaths.length,
       itemBuilder: (context, index) {
-        final path = favoriteUrls[index];
-
+        final rawPath = favoritePaths[index];
+        final path = _normalizePath(rawPath);
         return FutureBuilder<String>(
+          key: ValueKey(path),
           future: getImageUrl(path),
           builder: (context, snapshot) {
             if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
+              return loadingWidget();
             }
 
             final imageUrl = snapshot.data!;
@@ -527,7 +822,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => PreviewScreen(url: imageUrl),
+                    builder: (_) => SwipeViewer(
+                      images: favoritePaths, // 🔥 use favorite list
+                      initialIndex: index,
+                    ),
                   ),
                 );
               },
@@ -539,22 +837,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Stack(
                   children: [
                     Positioned.fill(
-                      child: Image.network(imageUrl, fit: BoxFit.cover,
-                      loadingBuilder: (context, child, loadingProgress) => loadingProgress == null
-                          ? child
-                          : Container(
-                              color: Colors.grey[300],
-                              child: const Center(
-                                child: CircularProgressIndicator(),
+                      child: Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.low,
+                        loadingBuilder: (context, child, loadingProgress) =>
+                            loadingProgress == null
+                            ? child
+                            : Container(
+                                color: Colors.grey[300],
+                                child: Center(child: loadingWidget()),
                               ),
-                            ),
                       ),
                     ),
                     Positioned(
                       top: 5,
                       right: 5,
                       child: GestureDetector(
-                        onTap: () => toggleFavorite(imageUrl),
+                        onTap: () => toggleFavorite(path),
                         child: CircleAvatar(
                           radius: 14,
                           backgroundColor: Colors.black54,
@@ -622,7 +922,7 @@ class _HomeScreenState extends State<HomeScreen> {
               backgroundColor: Colors.black,
               onPressed: isUploading ? null : pickImage,
               child: isUploading
-                  ? const CircularProgressIndicator(color: Colors.white)
+                  ? loadingWidget()
                   : const Icon(Icons.add, color: Colors.white),
             )
           : null,
@@ -634,7 +934,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // 🖼 GALLERY TAB
 
       if (isLoading) {
-        return const Center(child: CircularProgressIndicator());
+        return loadingWidget();
       }
 
       if (imageUrls.isEmpty) {
@@ -668,6 +968,10 @@ class _HomeScreenState extends State<HomeScreen> {
       return buildFavoritesGrid();
     }
   }
+}
+
+Widget loadingWidget() {
+  return const Center(child: CircularProgressIndicator(strokeWidth: 2));
 }
 
 class EmptyState extends StatelessWidget {
