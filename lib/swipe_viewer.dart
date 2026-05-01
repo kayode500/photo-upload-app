@@ -1,5 +1,7 @@
-import 'package:amplify_flutter/amplify_flutter.dart';
+
 import 'package:flutter/material.dart';
+import 'package:photo_upload_app/home_screen.dart';
+import 'package:photo_upload_app/core/services/image_service.dart';
 class SwipeViewer extends StatefulWidget {
   final List<String> images;
   final int initialIndex;
@@ -80,27 +82,25 @@ Widget build(BuildContext context) {
         scale: scale,
         child: SizedBox.expand(
           child: FutureBuilder<String>(
-            future: Amplify.Storage.getUrl(
-              path: StoragePath.fromString(widget.image), // 🔥 now using PATH
-            ).result.then((r) => r.url.toString()),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const Center(
-                  child: CircularProgressIndicator(),
-                );
-              }
-
-              return Image.network(
-                snapshot.data!,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return const Center(
-                    child: Icon(Icons.broken_image, color: Colors.grey),
-                  );
-                },
+          future: getImageUrl(widget.image), // ✅ USE YOUR CACHE LOGIC
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return Center(
+                child: loadingWidget(),
               );
-            },
-          ),
+            }
+
+            return Image.network(
+              snapshot.data!,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Center(
+                  child: Icon(Icons.broken_image, color: Colors.grey),
+                );
+              },
+            );
+          },
+        ),
         ),
       ),
     ),

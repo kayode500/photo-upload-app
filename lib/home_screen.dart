@@ -9,9 +9,10 @@ import 'package:share_plus/share_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
-//import 'package:flutter/foundation.dart';
+
 import 'package:permission_handler/permission_handler.dart';
 import 'swipe_viewer.dart';
+import 'core/services/image_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -38,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int currentLimit = 20;
   final Map<String, String> signedUrlCache = {};
   final ScrollController _scrollController = ScrollController();
+  final Map<String, Future<String>> pendingRequests = {};
 
   @override
   void initState() {
@@ -180,6 +182,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       isLoading = false;
     });
+    preloadImages(imagePaths);
   }
 
   Future<void> loadMoreImages({bool reset = false}) async {
@@ -287,35 +290,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // }
-  Future<String> getImageUrl(String path) async {
-    final key = _normalizePath(path);
-
-    // ✅ return cached URL instantly
-    if (signedUrlCache.containsKey(key)) {
-      return signedUrlCache[key]!;
-    }
-
-    try {
-      final result = await Amplify.Storage.getUrl(
-        path: StoragePath.fromString(key),
-      ).result;
-
-      final url = result.url.toString();
-
-      // ✅ store in cache
-      signedUrlCache[key] = url;
-
-      // ✅ prevent memory overflow
-      if (signedUrlCache.length > 100) {
-        signedUrlCache.clear();
-      }
-
-      return url;
-    } catch (e) {
-      print("❌ getImageUrl error: $e");
-      rethrow;
-    }
-  }
 
   String extractPath(String fullUrl) {
     final uri = Uri.parse(fullUrl);
@@ -530,8 +504,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       favoriteMap = tempMap;
-      // favoritePaths = favoriteMap.keys.toList();
     });
+    preloadImages(favoriteMap.keys.toList());
 
     //print("✅ Favorites synced: ${favoriteMap.length}");
   }
@@ -664,30 +638,36 @@ class _HomeScreenState extends State<HomeScreen> {
                         );
                       }
 
-                      return Image.network(
-                        snapshot.data!,
-                        fit: BoxFit.cover,
-                        filterQuality: FilterQuality.low,
-                        loadingBuilder: (context, child, progress) {
-                          if (progress == null) return child;
-                          return Container(
-                            color: Colors.grey[200],
-                            child: const Center(
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          );
-                        },
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            color: Colors.grey[300],
-                            child: const Center(
-                              child: Icon(
-                                Icons.broken_image,
-                                color: Colors.grey,
+                      return AnimatedOpacity(
+                        opacity: snapshot.hasData ? 1.0 : 0.0,
+                        duration: const Duration(milliseconds: 300),
+                        child: Image.network(
+                          snapshot.data!,
+                          fit: BoxFit.cover,
+                          filterQuality: FilterQuality.low,
+                          loadingBuilder: (context, child, progress) {
+                            if (progress == null) return child;
+                            return Container(
+                              color: Colors.grey[200],
+                              child: const Center(
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
-                            ),
-                          );
-                        },
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: Colors.grey[300],
+                              child: const Center(
+                                child: Icon(
+                                  Icons.broken_image,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                       );
                     },
                   ),
@@ -884,13 +864,13 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
         title: const Text(
-          "My Gallery",
+          "Cloud Gallery",
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
         elevation: 0,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
         actions: [
           IconButton(icon: const Icon(Icons.logout), onPressed: logout),
         ],
