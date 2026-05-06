@@ -1,4 +1,3 @@
-
 # 📸 Photo Upload App
 
 A modern Flutter-based photo management app that allows users to upload, view, favorite, share, and download images seamlessly with cloud storage integration.
@@ -34,15 +33,19 @@ A modern Flutter-based photo management app that allows users to upload, view, f
 ## 📸 Screenshots
 
 ### 🔐 Login Screen
+
 ![Login](assets/screenshots/login.png)
 
 ### 🖼️ Gallery View
+
 ![Gallery](assets/screenshots/gallery.png)
 
 ### ❤️ Favorites
+
 ![Favorites](assets/screenshots/favorites.png)
 
 ### 🔍 Image Viewer
+
 ![Viewer](assets/screenshots/viewer.png)
 
 ---
@@ -63,3 +66,4 @@ git clone https://github.com/yourusername/photo-upload-app.git
 cd photo-upload-app
 flutter pub get
 flutter run
+```
