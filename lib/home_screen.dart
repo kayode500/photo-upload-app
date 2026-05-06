@@ -8,8 +8,7 @@ import 'auth/auth_ screen.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:image_gallery_saver/image_gallery_saver.dart';
-
+import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'swipe_viewer.dart';
 import 'core/services/image_service.dart';
@@ -68,7 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       await uploadToS3(file, image.name);
     } catch (e) {
-      print("Pick image error: $e");
+      // print("Pick image error: $e");
     }
   }
 
@@ -105,7 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
         context,
       ).showSnackBar(const SnackBar(content: Text("Upload successful")));
     } catch (e) {
-      print("Upload error: $e");
+      // print("Upload error: $e");
 
       ScaffoldMessenger.of(
         context,
@@ -167,13 +166,13 @@ class _HomeScreenState extends State<HomeScreen> {
           imageUrls.add(url);
           imagePaths.add(path);
         } catch (e) {
-          print("❌ URL error for $path: $e");
+          // print("❌ URL error for $path: $e");
         }
       }
 
       setState(() {});
     } catch (e) {
-      print("❌ ERROR: $e");
+      // print("❌ ERROR: $e");
       setState(() {
         status = "❌ Error loading images: $e";
       });
@@ -187,7 +186,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> loadMoreImages({bool reset = false}) async {
     if (isFetchingMore) return;
-    // final int pageSize = 5;
 
     isFetchingMore = true;
 
@@ -215,16 +213,13 @@ class _HomeScreenState extends State<HomeScreen> {
           imagePaths.add(path);
           signedUrlCache[path] = urlResult.url.toString();
         } catch (e) {
-          print("❌ URL error: $e");
+          // print("❌ URL error: $e");
         }
       }
-      // print("📦 Loaded batch:");
-      // print("Current visible: ${imageUrls.length}");
-      // print("Total paths: ${allPaths.length}");
 
       setState(() {});
     } catch (e) {
-      print("❌ Pagination error: $e");
+      // print("❌ Pagination error: $e");
     }
 
     isFetchingMore = false;
@@ -283,9 +278,9 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       });
 
-      print("✅ Image deleted");
+      // print("✅ Image deleted");
     } catch (e) {
-      print("❌ Delete error: $e");
+      // print("❌ Delete error: $e");
     }
   }
 
@@ -335,9 +330,9 @@ class _HomeScreenState extends State<HomeScreen> {
         context,
         MaterialPageRoute(builder: (_) => const AuthScreen()),
       );
-      print("✅ Logged out successfully");
+      // print("✅ Logged out successfully");
     } catch (e) {
-      print("❌ Logout error: $e");
+      // print("❌ Logout error: $e");
     }
   }
 
@@ -386,7 +381,7 @@ class _HomeScreenState extends State<HomeScreen> {
               )
               .response;
 
-          print("🗑 Deleted: $id");
+          // print("🗑 Deleted: $id");
         }
       } while (nextToken != null);
 
@@ -394,9 +389,9 @@ class _HomeScreenState extends State<HomeScreen> {
         favoriteMap.clear();
       });
 
-      print("✅ ALL favorites cleared from DB");
+      // print("✅ ALL favorites cleared from DB");
     } catch (e) {
-      print("❌ Error clearing favorites: $e");
+      // print("❌ Error clearing favorites: $e");
     }
   }
 
@@ -428,7 +423,7 @@ class _HomeScreenState extends State<HomeScreen> {
           favoriteMap.remove(key);
         });
       } catch (e) {
-        print("❌ Remove favorite error: $e");
+        // print("❌ Remove favorite error: $e");
       }
     } else {
       try {
@@ -455,7 +450,7 @@ class _HomeScreenState extends State<HomeScreen> {
           favoriteMap[key] = newItem['id'];
         });
       } catch (e) {
-        print("❌ Add favorite error: $e");
+        // print("❌ Add favorite error: $e");
       }
     }
   }
@@ -477,7 +472,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final response = await Amplify.API.query(request: request).response;
 
     if (response.data == null) {
-      print("❌ No response data");
+      // print("❌ No response data");
       return;
     }
 
@@ -507,82 +502,93 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     preloadImages(favoriteMap.keys.toList());
 
-    //print("✅ Favorites synced: ${favoriteMap.length}");
+    // print("✅ Favorites synced: ${favoriteMap.length}");
   }
 
   Future<void> shareImage(String path) async {
     try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Preparing image..."),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.black87,
-          duration: Duration(seconds: 2),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Preparing image...")));
 
-      final signedUrl = await getImageUrl(path);
+      final url = await getImageUrl(path);
 
-      // 🔥 DOWNLOAD IMAGE
-      final response = await http.get(Uri.parse(signedUrl));
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) {
+        throw Exception("Download failed");
+      }
 
       final tempDir = await getTemporaryDirectory();
-      final file = File('${tempDir.path}/shared_image.png');
+      final file = File(
+        '${tempDir.path}/shared_${DateTime.now().millisecondsSinceEpoch}.png',
+      );
 
       await file.writeAsBytes(response.bodyBytes);
 
-      // 🔥 SHARE FILE (NOT LINK)
       await Share.shareXFiles([
         XFile(file.path),
       ], text: "Check out this image!");
     } catch (e) {
+      // print("❌ Share error: $e");
+
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("Failed to share image")));
-
-      print("❌ Share error: $e");
     }
   }
 
   Future<void> downloadImage(String path) async {
     try {
-      // 🔥 REQUEST PERMISSION FIRST
-      final status = await Permission.photos.request();
+      final hasPermission = await requestPermission();
 
-      if (!status.isGranted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Permission denied"),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.black87,
-            duration: Duration(seconds: 2),
-          ),
-        );
+      if (!hasPermission) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("Permission denied")));
         return;
       }
 
-      final signedUrl = await getImageUrl(path);
-      final response = await http.get(Uri.parse(signedUrl));
+      final url = await getImageUrl(path);
+      final response = await http.get(Uri.parse(url));
 
-      final result = await ImageGallerySaver.saveImage(
+      if (response.statusCode != 200) {
+        throw Exception("Download failed with status ${response.statusCode}");
+      }
+
+      await Gal.putImageBytes(
         response.bodyBytes,
-        quality: 100,
-        name: "downloaded_image",
+        name: "download_${DateTime.now().millisecondsSinceEpoch}",
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Image saved to gallery"),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.black87,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-
-      print("✅ Saved: $result");
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Saved to gallery")));
     } catch (e) {
-      print("❌ Download error: $e");
+      // print("❌ Download error: $e");
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Download failed")));
     }
+  }
+
+  Future<bool> requestPermission() async {
+    if (Platform.isAndroid) {
+      if (await Permission.photos.isGranted ||
+          await Permission.storage.isGranted) {
+        return true;
+      }
+
+      final photos = await Permission.photos.request();
+
+      if (photos.isGranted) return true;
+
+      final storage = await Permission.storage.request();
+
+      return storage.isGranted;
+    }
+
+    return true;
   }
 
   String _normalizePath(String url) {
@@ -877,7 +883,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
 
       // 👇 BODY SWITCHES BETWEEN TABS
-      body: getCurrentScreen(),
+      body: IndexedStack(
+        index: currentIndex,
+        children: [getGalleryScreen(), buildFavoritesGrid()],
+      ),
 
       // 👇 BOTTOM NAVIGATION
       bottomNavigationBar: BottomNavigationBar(
@@ -909,44 +918,37 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget getCurrentScreen() {
-    if (currentIndex == 0) {
-      // 🖼 GALLERY TAB
+  Widget getGalleryScreen() {
+    if (isLoading) {
+      return loadingWidget();
+    }
 
-      if (isLoading) {
-        return loadingWidget();
-      }
-
-      if (imageUrls.isEmpty) {
-        return RefreshIndicator(
-          onRefresh: fetchImages,
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            children: const [SizedBox(height: 200), EmptyState()],
-          ),
-        );
-      }
-
+    if (imageUrls.isEmpty) {
       return RefreshIndicator(
         onRefresh: fetchImages,
-        child: GridView.builder(
+        child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(12),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-          ),
-          itemCount: imageUrls.length,
-          itemBuilder: (context, index) {
-            return buildImageItem(index);
-          },
+          children: const [SizedBox(height: 200), EmptyState()],
         ),
       );
-    } else {
-      // ❤️ FAVORITES TAB
-      return buildFavoritesGrid();
     }
+
+    return RefreshIndicator(
+      onRefresh: fetchImages,
+      child: GridView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
+        ),
+        itemCount: imageUrls.length,
+        itemBuilder: (context, index) {
+          return buildImageItem(index);
+        },
+      ),
+    );
   }
 }
 

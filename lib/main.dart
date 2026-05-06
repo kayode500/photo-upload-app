@@ -43,7 +43,7 @@ class _MyAppState extends State<MyApp> {
         isAmplifyReady = true;
       });
     } catch (e) {
-      print("Amplify error: $e");
+      // print("Amplify error: $e");
     }
   }
 
@@ -55,13 +55,9 @@ class _MyAppState extends State<MyApp> {
       // ⏳ Wait until Amplify is ready
       home: isAmplifyReady
           ? const AuthScreen()
-          : const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            ),
+          : const Scaffold(body: Center(child: CircularProgressIndicator())),
 
-      routes: {
-        "/home": (context) => const HomeScreen(),
-      },
+      routes: {"/home": (context) => const HomeScreen()},
     );
   }
 }

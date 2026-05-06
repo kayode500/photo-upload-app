@@ -19,6 +19,12 @@ class _AuthScreenState extends State<AuthScreen> {
 
   String status = "";
 
+  @override
+  void initState() {
+    super.initState();
+    checkAuthState();
+  }
+
   Future<void> signUp() async {
     // 🔥 Basic validation
     if (emailController.text.trim().isEmpty ||
@@ -114,52 +120,69 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> signIn() async {
-    // 🔥 Basic validation
-    if (emailController.text.trim().isEmpty ||
-        passwordController.text.trim().isEmpty) {
-      setState(() {
-        status = "Please enter email and password";
-      });
-      return;
-    }
-
-    setState(() {
-      isLoading = true;
-      status = "";
-    });
-
     try {
+      // 🔥 STEP 1: check existing session
+      final session = await Amplify.Auth.fetchAuthSession();
+
+      if (session.isSignedIn) {
+        // ✅ already signed in → go home
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+        return;
+      }
+
+      // 🔥 STEP 2: proceed with login
       final result = await Amplify.Auth.signIn(
         username: emailController.text.trim(),
         password: passwordController.text.trim(),
       );
 
       if (result.isSignedIn) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("Login successful")));
-        // ✅ Navigate to home
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
         );
       } else {
         setState(() {
-          status = "Login not complete. Please try again.";
+          status = "❌ Login not complete";
         });
       }
     } catch (e) {
-      final msg = getAuthErrorMessage(e); // 🔥 CLEAN ERROR
+      final message = e.toString();
+
+      // 🔥 HANDLE "already signed in" EDGE CASE
+      if (message.contains("signed in")) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+        return;
+      }
 
       setState(() {
-        status = msg;
+        status = getAuthErrorMessage(e);
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    }
 
-    setState(() {
-      isLoading = false;
-    });
+      // print("❌ Login error: $e");
+    }
+  }
+
+  Future<void> checkAuthState() async {
+    try {
+      final session = await Amplify.Auth.fetchAuthSession();
+
+      if (session.isSignedIn) {
+        // 🔥 User already logged in → go to home
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+      }
+    } catch (e) {
+      // print("Auth check error: $e");
+    }
   }
 
   String getAuthErrorMessage(dynamic error) {
@@ -178,7 +201,7 @@ class _AuthScreenState extends State<AuthScreen> {
     } else if (message.contains("NetworkException")) {
       return "Check your internet connection.";
     } else {
-      return "Something went wrong. Try again.";
+      return message; // Fallback to original error if we don't recognize it
     }
   }
 

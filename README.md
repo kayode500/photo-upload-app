@@ -1,50 +1,65 @@
-# 🚀 Private Cloud Gallery App
 
-A Flutter mobile app that allows users to upload, view, favorite, and manage private images securely using AWS Amplify.
+# 📸 Photo Upload App
 
----
-
-## ✨ Features
-
-- 📤 Upload images to secure cloud storage (S3)
-- 🖼️ Smooth grid gallery
-- ❤️ Favorite system with cloud sync (GraphQL)
-- 🔍 Swipe viewer with zoom & gestures
-- 🗑️ Delete images with confirmation
-- ⚡ Cached signed URLs for fast performance
+A modern Flutter-based photo management app that allows users to upload, view, favorite, share, and download images seamlessly with cloud storage integration.
 
 ---
 
-## 🧠 Architecture
+## 🚀 Features
 
-- **Frontend:** Flutter
-- **Storage:** AWS Amplify S3
-- **API:** GraphQL
-- **State Management:** Local state with normalized path identity
-
----
-
-## 🔥 Key Challenges Solved
-
-- Eliminated duplicate favorites using consistent path identity
-- Fixed gesture conflicts (tap vs long press)
-- Optimized image loading with caching
-- Maintained sync between gallery and favorites after login/logout
+- 🔐 Secure authentication (Sign up / Sign in)
+- 📤 Upload images to cloud storage
+- 🖼️ Gallery view with smooth grid layout
+- ❤️ Favorite / Unfavorite images
+- 🔍 Full-screen swipe image viewer
+- 📤 Share images to other apps (WhatsApp, etc.)
+- 💾 Download images to device gallery
+- ⚡ Optimized image loading with caching
+- 📱 Smooth UI with tab navigation (no flicker)
 
 ---
 
-## 📱 Screens
+## 🧠 Tech Stack
 
-- Gallery View
-- Favorites View
-- Swipe Viewer
+- Flutter
+- Dart
+- AWS Amplify (Auth + Storage)
+- GraphQL API
+- HTTP package
+- Share Plus
+- Permission Handler
 
 ---
 
-## ⚙️ Setup
+## 📸 Screenshots
 
-1. Clone the repo
-2. Run:
-   ```bash
-   flutter pub get
-   ```
+### 🔐 Login Screen
+![Login](assets/screenshots/login.png)
+
+### 🖼️ Gallery View
+![Gallery](assets/screenshots/gallery.png)
+
+### ❤️ Favorites
+![Favorites](assets/screenshots/favorites.png)
+
+### 🔍 Image Viewer
+![Viewer](assets/screenshots/viewer.png)
+
+---
+
+## ⚙️ Architecture Highlights
+
+- Centralized image URL caching (performance optimization)
+- IndexedStack for smooth tab switching (no flicker)
+- Session persistence with Amplify Auth
+- Clean separation of UI and services
+
+---
+
+## 📦 Installation
+
+```bash
+git clone https://github.com/yourusername/photo-upload-app.git
+cd photo-upload-app
+flutter pub get
+flutter run
