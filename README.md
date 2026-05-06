@@ -34,19 +34,19 @@ A modern Flutter-based photo management app that allows users to upload, view, f
 
 ### 🔐 Login Screen
 
-![Login](assets/screenshots/login.jpeg)
+![Login](./assets/screenshots/login.jpeg)
 
 ### 🖼️ Gallery View
 
-![Gallery](assets/screenshots/gallery.jpeg)
+![Gallery](./assets/screenshots/gallery.jpeg)
 
 ### ❤️ Favorites
 
-![Favorites](assets/screenshots/favorite.jpeg)
+![Favorites](./assets/screenshots/favorite.jpeg)
 
 ### 🔍 Image Viewer
 
-![Viewer](assets/screenshots/viewer.jpeg)
+![Viewer](./assets/screenshots/viewer.jpeg)
 
 ---
 
